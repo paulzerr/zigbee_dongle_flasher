@@ -38,6 +38,8 @@ TEST_BRIGHTNESS = 180
 PREP_BRIGHTNESS = 1
 ON_SECONDS = 0.175
 OFF_SECONDS = 0.1
+COLOR_SETTLE_SECONDS = 0.05
+COLOR_ATTEMPTS = 3
 
 
 def parse_args() -> argparse.Namespace:
@@ -80,6 +82,7 @@ def build_config(serial_port: str, database: Path) -> dict[str, Any]:
             zigpy_conf.CONF_DEVICE_FLOW_CONTROL: None,
         },
         zigpy_conf.CONF_DATABASE: str(database.resolve()),
+        zigpy_conf.CONF_NWK_BACKUP_ENABLED: False,
         zigpy_conf.CONF_OTA: {zigpy_conf.CONF_OTA_ENABLED: False},
     }
 
@@ -157,6 +160,42 @@ async def restore_state(device: Device, state: dict[str, int | bool]) -> None:
         await onoff.off(expect_reply=True)
 
 
+async def apply_and_verify_color(
+    color: Any,
+    name: str,
+    hue: int,
+    saturation: int,
+) -> dict[str, int | str]:
+    observed_hue = -1
+    observed_saturation = -1
+    for attempt in range(1, COLOR_ATTEMPTS + 1):
+        await color.move_to_hue_and_saturation(
+            hue=hue,
+            saturation=saturation,
+            transition_time=0,
+            expect_reply=True,
+        )
+        await asyncio.sleep(COLOR_SETTLE_SECONDS)
+        success, _ = await color.read_attributes(
+            ["current_hue", "current_saturation"],
+            allow_cache=False,
+        )
+        observed_hue = int(success["current_hue"])
+        observed_saturation = int(success["current_saturation"])
+        hue_error = min(abs(observed_hue - hue), 255 - abs(observed_hue - hue))
+        if hue_error <= 3 and abs(observed_saturation - saturation) <= 3:
+            return {
+                "name": name,
+                "hue": observed_hue,
+                "saturation": observed_saturation,
+                "attempts": attempt,
+            }
+    raise RuntimeError(
+        f"{name} was not applied after {COLOR_ATTEMPTS} attempts: "
+        f"hue={observed_hue}, saturation={observed_saturation}"
+    )
+
+
 async def run_test(
     serial_port: str,
     database: Path,
@@ -196,7 +235,9 @@ async def run_test(
         color = find_input_cluster(device, Color.cluster_id)
         level = find_input_cluster(device, LevelControl.cluster_id)
         onoff = find_input_cluster(device, OnOff.cluster_id)
-        observed_colors = []
+        observed_colors: list[dict[str, int | str]] = []
+        sequence_error: Exception | None = None
+        after: dict[str, int | bool] | None = None
         mutation_started = True
         try:
             await level.move_to_level_with_on_off(
@@ -213,32 +254,10 @@ async def run_test(
                     transition_time=0,
                     expect_reply=True,
                 )
-                await color.move_to_hue_and_saturation(
-                    hue=hue,
-                    saturation=saturation,
-                    transition_time=0,
-                    expect_reply=True,
-                )
-                await asyncio.sleep(0.05)
-                success, _ = await color.read_attributes(
-                    ["current_hue", "current_saturation"],
-                    allow_cache=False,
-                )
-                observed_hue = int(success["current_hue"])
-                observed_saturation = int(success["current_saturation"])
-                hue_error = min(abs(observed_hue - hue), 255 - abs(observed_hue - hue))
-                if hue_error > 3 or abs(observed_saturation - saturation) > 3:
-                    raise RuntimeError(
-                        f"{name} was not applied: hue={observed_hue}, "
-                        f"saturation={observed_saturation}"
-                    )
                 observed_colors.append(
-                    {
-                        "name": name,
-                        "hue": observed_hue,
-                        "saturation": observed_saturation,
-                    }
+                    await apply_and_verify_color(color, name, hue, saturation)
                 )
+                write_json(run_dir / "observed_colors.json", observed_colors)
                 await level.move_to_level_with_on_off(
                     level=TEST_BRIGHTNESS,
                     transition_time=0,
@@ -252,16 +271,23 @@ async def run_test(
                 )
                 await onoff.off(expect_reply=True)
                 await asyncio.sleep(OFF_SECONDS)
+        except Exception as exc:
+            sequence_error = exc
         finally:
             if mutation_started:
                 await restore_state(device, before)
+                after = await read_state(device)
+                write_json(
+                    run_dir / "after_state.json",
+                    {"bulb_id": label, "ieee": ieee, **after},
+                )
 
         write_json(run_dir / "observed_colors.json", observed_colors)
-        after = await read_state(device)
-        write_json(run_dir / "after_state.json", {"bulb_id": label, "ieee": ieee, **after})
         if after != before:
             raise RuntimeError(f"Test completed, but state restoration differs: {after}")
         print(f"Restored and verified: {after}")
+        if sequence_error is not None:
+            raise sequence_error
     finally:
         await app.shutdown()
 
