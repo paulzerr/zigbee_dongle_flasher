@@ -47,7 +47,7 @@ def find_input_cluster(device: Device, cluster_id: int) -> Any:
     if hasattr(device, "find_cluster"):
         return device.find_cluster(cluster_id)
     for endpoint in device.endpoints.values():
-        cluster = endpoint.in_clusters.get(cluster_id)
+        cluster = getattr(endpoint, "in_clusters", {}).get(cluster_id)
         if cluster is not None:
             return cluster
     raise RuntimeError(f"Bulb has no input cluster 0x{cluster_id:04x}")
