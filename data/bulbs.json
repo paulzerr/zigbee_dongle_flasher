@@ -1,0 +1,80 @@
+{
+  "bulbs": [
+    {
+      "label": "BULB-L01",
+      "ieee": "f0:d1:b8:be:24:0b:bd:cc"
+    },
+    {
+      "label": "BULB-L02",
+      "ieee": "f0:d1:b8:be:24:0b:c1:1e"
+    },
+    {
+      "label": "BULB-L03",
+      "ieee": "f0:d1:b8:be:24:0b:c2:38"
+    },
+    {
+      "label": "BULB-L04",
+      "ieee": "f0:d1:b8:be:24:0c:6d:12"
+    },
+    {
+      "label": "BULB-L05",
+      "ieee": "f0:d1:b8:be:24:0c:68:73"
+    },
+    {
+      "label": "BULB-L06",
+      "ieee": "f0:d1:b8:be:24:0b:b9:84"
+    },
+    {
+      "label": "BULB-L07",
+      "ieee": "f0:d1:b8:be:24:0b:c8:9d"
+    },
+    {
+      "label": "BULB-L08",
+      "ieee": "f0:d1:b8:be:24:0c:69:44"
+    },
+    {
+      "label": "BULB-L09",
+      "ieee": "f0:d1:b8:be:24:0b:be:d7"
+    },
+    {
+      "label": "BULB-L10",
+      "ieee": "f0:d1:b8:be:24:0c:69:cc"
+    },
+    {
+      "label": "BULB-L11",
+      "ieee": "f0:d1:b8:be:24:0c:66:c3"
+    },
+    {
+      "label": "BULB-L12",
+      "ieee": "f0:d1:b8:be:24:0c:6b:03"
+    },
+    {
+      "label": "BULB-L13",
+      "ieee": "f0:d1:b8:be:24:0c:69:81"
+    },
+    {
+      "label": "BULB-L14",
+      "ieee": "f0:d1:b8:be:24:0c:66:30"
+    },
+    {
+      "label": "BULB-L15",
+      "ieee": "f0:d1:b8:be:24:0c:69:4b"
+    },
+    {
+      "label": "BULB-L16",
+      "ieee": "f0:d1:b8:be:24:0c:6c:b2"
+    },
+    {
+      "label": "BULB-L17",
+      "ieee": "f0:d1:b8:be:24:0c:66:6e"
+    },
+    {
+      "label": "BULB-L18",
+      "ieee": "f0:d1:b8:be:24:0c:6d:07"
+    },
+    {
+      "label": "BULB-L19",
+      "ieee": "f0:d1:b8:be:24:0c:69:5e"
+    }
+  ]
+}

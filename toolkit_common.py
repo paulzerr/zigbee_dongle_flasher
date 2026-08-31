@@ -143,6 +143,10 @@ def _device_map(backup: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+def backup_device_ids(backup: dict[str, Any]) -> set[str]:
+    return set(_device_map(backup))
+
+
 def backup_summary(backup: dict[str, Any]) -> dict[str, Any]:
     devices = _device_map(backup)
     device_ids = sorted(devices)
