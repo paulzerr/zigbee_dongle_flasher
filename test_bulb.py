@@ -40,6 +40,7 @@ ON_SECONDS = 0.175
 OFF_SECONDS = 0.1
 COLOR_SETTLE_SECONDS = 0.05
 COLOR_ATTEMPTS = 3
+COLOR_TRANSITION_TENTHS = 1
 
 
 def parse_args() -> argparse.Namespace:
@@ -172,7 +173,7 @@ async def apply_and_verify_color(
         await color.move_to_hue_and_saturation(
             hue=hue,
             saturation=saturation,
-            transition_time=0,
+            transition_time=COLOR_TRANSITION_TENTHS,
             expect_reply=True,
         )
         await asyncio.sleep(COLOR_SETTLE_SECONDS)
@@ -223,6 +224,7 @@ async def run_test(
                 "on_seconds": ON_SECONDS,
                 "off_seconds": OFF_SECONDS,
                 "color_preparation_brightness": PREP_BRIGHTNESS,
+                "color_transition_seconds": COLOR_TRANSITION_TENTHS / 10,
                 "restore_state": before,
             },
         )

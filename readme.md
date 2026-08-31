@@ -117,10 +117,11 @@ saves the state and exact plan under `runs/`, and asks for `BLINK`. It then
 blinks the bulb once in each color—red, blue, and green—and restores and verifies
 the original state. Each pulse lasts 0.175 seconds with a 0.1-second pause. The
 bulb is held at minimum brightness while its next hue is applied, which avoids a
-bright flash of the previous color. A rejected color command is retried at that
-minimum level before the visible pulse starts. The test uses a private database
-snapshot and disables periodic coordinator backups, so routine Zigbee traffic
-does not alter the committed master database or compete with the smoke test.
+bright flash of the previous color. Hue changes use the bulb's minimum supported
+0.1-second transition and are retried at that minimum level before the visible
+pulse starts. The test uses a private database snapshot and disables periodic
+coordinator backups, so routine Zigbee traffic does not alter the committed
+master database or compete with the smoke test.
 
 To recover a dongle from a saved pre-restore backup, use the pinned environment:
 
