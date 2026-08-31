@@ -115,8 +115,10 @@ Enter its inventory label, for example `BULB-L14`. The script captures the
 bulb's on/off, brightness, hue, and saturation values before doing anything,
 saves the state and exact plan under `runs/`, and asks for `BLINK`. It then
 blinks the bulb once in each color—red, blue, and green—and restores and verifies
-the original state. The test uses a private database snapshot, so routine Zigbee
-traffic does not alter the committed master database.
+the original state. Each pulse lasts 0.175 seconds with a 0.1-second pause. The
+bulb is held at minimum brightness while its next hue is applied, which avoids a
+bright flash of the previous color. The test uses a private database snapshot,
+so routine Zigbee traffic does not alter the committed master database.
 
 To recover a dongle from a saved pre-restore backup, use the pinned environment:
 

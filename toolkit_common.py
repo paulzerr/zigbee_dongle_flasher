@@ -379,7 +379,7 @@ def update_overview(operation: str, *, data_changed: bool) -> None:
     }
     temporary = OVERVIEW.with_name(f".{OVERVIEW.name}.tmp")
     with temporary.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=OVERVIEW_FIELDS)
+        writer = csv.DictWriter(handle, fieldnames=OVERVIEW_FIELDS, lineterminator="\n")
         writer.writeheader()
         writer.writerow(row)
     os.replace(temporary, OVERVIEW)

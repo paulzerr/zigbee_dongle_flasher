@@ -34,6 +34,10 @@ COLORS = (
     ("blue", 169, 254),
     ("green", 85, 254),
 )
+TEST_BRIGHTNESS = 180
+PREP_BRIGHTNESS = 1
+ON_SECONDS = 0.175
+OFF_SECONDS = 0.1
 
 
 def parse_args() -> argparse.Namespace:
@@ -137,25 +141,19 @@ async def restore_state(device: Device, state: dict[str, int | bool]) -> None:
     color = find_input_cluster(device, Color.cluster_id)
     level = find_input_cluster(device, LevelControl.cluster_id)
     onoff = find_input_cluster(device, OnOff.cluster_id)
+    await onoff.on(expect_reply=True)
     await color.move_to_hue_and_saturation(
         hue=state["current_hue"],
         saturation=state["current_saturation"],
         transition_time=1,
         expect_reply=True,
     )
-    if state["on_off"]:
-        await onoff.on(expect_reply=True)
-        await level.move_to_level_with_on_off(
-            level=state["current_level"],
-            transition_time=1,
-            expect_reply=True,
-        )
-    else:
-        await level.move_to_level(
-            level=state["current_level"],
-            transition_time=1,
-            expect_reply=True,
-        )
+    await level.move_to_level_with_on_off(
+        level=state["current_level"],
+        transition_time=1,
+        expect_reply=True,
+    )
+    if not state["on_off"]:
         await onoff.off(expect_reply=True)
 
 
@@ -182,9 +180,10 @@ async def run_test(
                 "bulb_id": label,
                 "ieee": ieee,
                 "sequence": [name for name, _, _ in COLORS],
-                "brightness": 180,
-                "on_seconds": 0.35,
-                "off_seconds": 0.2,
+                "brightness": TEST_BRIGHTNESS,
+                "on_seconds": ON_SECONDS,
+                "off_seconds": OFF_SECONDS,
+                "color_preparation_brightness": PREP_BRIGHTNESS,
                 "restore_state": before,
             },
         )
@@ -200,16 +199,27 @@ async def run_test(
         observed_colors = []
         mutation_started = True
         try:
+            await level.move_to_level_with_on_off(
+                level=PREP_BRIGHTNESS,
+                transition_time=0,
+                expect_reply=True,
+            )
+            await onoff.off(expect_reply=True)
+            await asyncio.sleep(OFF_SECONDS)
             for name, hue, saturation in COLORS:
                 print(name)
-                await onoff.on(expect_reply=True)
+                await level.move_to_level_with_on_off(
+                    level=PREP_BRIGHTNESS,
+                    transition_time=0,
+                    expect_reply=True,
+                )
                 await color.move_to_hue_and_saturation(
                     hue=hue,
                     saturation=saturation,
-                    transition_time=1,
+                    transition_time=0,
                     expect_reply=True,
                 )
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(0.05)
                 success, _ = await color.read_attributes(
                     ["current_hue", "current_saturation"],
                     allow_cache=False,
@@ -230,13 +240,18 @@ async def run_test(
                     }
                 )
                 await level.move_to_level_with_on_off(
-                    level=180,
-                    transition_time=1,
+                    level=TEST_BRIGHTNESS,
+                    transition_time=0,
                     expect_reply=True,
                 )
-                await asyncio.sleep(0.35)
+                await asyncio.sleep(ON_SECONDS)
+                await level.move_to_level_with_on_off(
+                    level=PREP_BRIGHTNESS,
+                    transition_time=0,
+                    expect_reply=True,
+                )
                 await onoff.off(expect_reply=True)
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(OFF_SECONDS)
         finally:
             if mutation_started:
                 await restore_state(device, before)
