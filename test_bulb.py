@@ -143,13 +143,20 @@ async def restore_state(device: Device, state: dict[str, int | bool]) -> None:
         transition_time=1,
         expect_reply=True,
     )
-    await level.move_to_level(
-        level=state["current_level"],
-        transition_time=1,
-        expect_reply=True,
-    )
-    command = onoff.on if state["on_off"] else onoff.off
-    await command(expect_reply=True)
+    if state["on_off"]:
+        await onoff.on(expect_reply=True)
+        await level.move_to_level_with_on_off(
+            level=state["current_level"],
+            transition_time=1,
+            expect_reply=True,
+        )
+    else:
+        await level.move_to_level(
+            level=state["current_level"],
+            transition_time=1,
+            expect_reply=True,
+        )
+        await onoff.off(expect_reply=True)
 
 
 async def run_test(
@@ -190,15 +197,37 @@ async def run_test(
         color = find_input_cluster(device, Color.cluster_id)
         level = find_input_cluster(device, LevelControl.cluster_id)
         onoff = find_input_cluster(device, OnOff.cluster_id)
+        observed_colors = []
         mutation_started = True
         try:
             for name, hue, saturation in COLORS:
                 print(name)
+                await onoff.on(expect_reply=True)
                 await color.move_to_hue_and_saturation(
                     hue=hue,
                     saturation=saturation,
                     transition_time=1,
                     expect_reply=True,
+                )
+                await asyncio.sleep(0.15)
+                success, _ = await color.read_attributes(
+                    ["current_hue", "current_saturation"],
+                    allow_cache=False,
+                )
+                observed_hue = int(success["current_hue"])
+                observed_saturation = int(success["current_saturation"])
+                hue_error = min(abs(observed_hue - hue), 255 - abs(observed_hue - hue))
+                if hue_error > 3 or abs(observed_saturation - saturation) > 3:
+                    raise RuntimeError(
+                        f"{name} was not applied: hue={observed_hue}, "
+                        f"saturation={observed_saturation}"
+                    )
+                observed_colors.append(
+                    {
+                        "name": name,
+                        "hue": observed_hue,
+                        "saturation": observed_saturation,
+                    }
                 )
                 await level.move_to_level_with_on_off(
                     level=180,
@@ -212,6 +241,7 @@ async def run_test(
             if mutation_started:
                 await restore_state(device, before)
 
+        write_json(run_dir / "observed_colors.json", observed_colors)
         after = await read_state(device)
         write_json(run_dir / "after_state.json", {"bulb_id": label, "ieee": ieee, **after})
         if after != before:
