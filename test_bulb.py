@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import Any
 
 import zigpy.config as zigpy_conf
+import zigpy.types as zigpy_types
+import zigpy.zdo
+import zigpy.zdo.types as zdo_types
 from zigpy.device import Device
 from zigpy.zcl.clusters.general import LevelControl, OnOff
 from zigpy.zcl.clusters.lighting import Color
@@ -100,6 +103,36 @@ async def read_state(device: Device) -> dict[str, int | bool]:
     return state
 
 
+async def refresh_address(app: ControllerApplication, ieee: str) -> None:
+    await zigpy.zdo.broadcast(
+        app=app,
+        command=zdo_types.ZDOCmd.NWK_addr_req,
+        grpid=None,
+        radius=0,
+        IEEEAddrOfInterest=zigpy_types.EUI64.convert(ieee),
+        RequestType=zdo_types.AddrRequestType.Single,
+        StartIndex=0,
+    )
+    await asyncio.sleep(1)
+
+
+async def capture_state(
+    app: ControllerApplication,
+    device: Device,
+    ieee: str,
+) -> dict[str, int | bool]:
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            return await read_state(device)
+        except Exception as exc:
+            last_error = exc
+            if attempt < 3:
+                print(f"No response yet; refreshing the bulb route ({attempt}/2)...")
+                await refresh_address(app, ieee)
+    raise RuntimeError("The selected bulb did not answer the state read") from last_error
+
+
 async def restore_state(device: Device, state: dict[str, int | bool]) -> None:
     color = find_input_cluster(device, Color.cluster_id)
     level = find_input_cluster(device, LevelControl.cluster_id)
@@ -134,7 +167,7 @@ async def run_test(
         if task is not None:
             await asyncio.wait_for(task, timeout=20)
 
-        before = await read_state(device)
+        before = await capture_state(app, device, ieee)
         write_json(run_dir / "before_state.json", {"bulb_id": label, "ieee": ieee, **before})
         write_json(
             run_dir / "blink_plan.json",
