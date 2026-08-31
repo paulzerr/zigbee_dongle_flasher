@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 from toolkit_common import (
     COORDINATOR_BACKUP,
@@ -43,13 +42,11 @@ def main() -> int:
     )
     incoming = validate_coordinator_backup(downloaded)
 
-    current = None
     comparison = []
     if COORDINATOR_BACKUP.exists():
         current_copy = run_dir / "previous_coordinator_backup.json"
         atomic_copy(COORDINATOR_BACKUP, current_copy)
-        current = load_json(current_copy)
-        comparison = compare_backups(current, incoming)
+        comparison = compare_backups(load_json(current_copy), incoming)
         print_backup_comparison(comparison)
     else:
         print("No existing coordinator backup is installed in data/.")
@@ -89,4 +86,3 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"\nStopped: {exc}")
         raise SystemExit(1)
-

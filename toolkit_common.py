@@ -395,8 +395,35 @@ def assert_master_data() -> None:
     for path in (COORDINATOR_BACKUP, DATABASE, INVENTORY):
         if not path.exists():
             raise RuntimeError(f"Missing required data file: {path}")
-    validate_coordinator_backup(COORDINATOR_BACKUP)
-    load_inventory(INVENTORY)
+    backup = validate_coordinator_backup(COORDINATOR_BACKUP)
+    inventory = load_inventory(INVENTORY)
     version = sqlite_user_version(DATABASE)
     if version != 13:
         raise RuntimeError(f"Expected zigpy database schema 13, found {version}")
+
+    labels = [str(item.get("label", "")).strip() for item in inventory["bulbs"]]
+    inventory_ids = [normalize_ieee(item.get("ieee")) for item in inventory["bulbs"]]
+    if any(not label for label in labels) or any(not ieee for ieee in inventory_ids):
+        raise RuntimeError("bulbs.json contains an empty label or IEEE address")
+    if len(set(label.casefold() for label in labels)) != len(labels):
+        raise RuntimeError("bulbs.json contains duplicate labels")
+    if len(set(inventory_ids)) != len(inventory_ids):
+        raise RuntimeError("bulbs.json contains duplicate IEEE addresses")
+
+    uri = f"file:{DATABASE.resolve()}?mode=ro&immutable=1"
+    with sqlite3.connect(uri, uri=True) as connection:
+        database_ids = {
+            normalize_ieee(row[0])
+            for row in connection.execute("SELECT ieee FROM devices_v13")
+        }
+    missing_from_db = sorted(set(inventory_ids) - database_ids)
+    missing_from_backup = sorted(set(inventory_ids) - backup_device_ids(backup))
+    if missing_from_db:
+        raise RuntimeError(
+            f"bulbs.json has {len(missing_from_db)} bulb(s) missing from zigpy.db"
+        )
+    if missing_from_backup:
+        raise RuntimeError(
+            "The coordinator backup is older than bulbs.json. Run "
+            "download_from_dongle.py with the known-good dongle before flashing."
+        )

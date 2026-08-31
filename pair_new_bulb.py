@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from pathlib import Path
 from typing import Any
 
 import zigpy.config as zigpy_conf
