@@ -111,17 +111,12 @@ Connect a flashed dongle and power exactly one paired bulb. Run:
 python test_bulb.py
 ```
 
-Enter its inventory label, for example `BULB-L14`. The script captures the
-bulb's on/off, brightness, hue, and saturation values before doing anything,
-saves the state and exact plan under `runs/`, and asks for `BLINK`. It then
-blinks the bulb once in each color—red, blue, and green—and restores and verifies
-the original state. Each pulse lasts 0.175 seconds with a 0.1-second pause. The
-bulb is held at minimum brightness while its next hue is applied, which avoids a
-bright flash of the previous color. Hue changes use the bulb's minimum supported
-0.1-second transition and are retried at that minimum level before the visible
-pulse starts. The test uses a private database snapshot and disables periodic
-coordinator backups, so routine Zigbee traffic does not alter the committed
-master database or compete with the smoke test.
+Enter its inventory label, for example `BULB-L14`. The script then directly
+blinks the bulb once in each color—red, blue, and green—and leaves it off. Each
+pulse lasts 0.175 seconds with a 0.1-second pause. It uses the same simple command
+order as the original working test and does not create a state snapshot or
+backup. A faint trace of the preceding color may appear while the bulb applies
+the next hue.
 
 To recover a dongle from a saved pre-restore backup, use the pinned environment:
 
