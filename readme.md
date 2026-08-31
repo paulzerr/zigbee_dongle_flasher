@@ -9,6 +9,7 @@ maintain it:
   downloads a fresh coordinator backup for the flasher.
 - `zigbee_dongle_flasher.py` clones the current coordinator data onto one new
   dongle.
+- `test_bulb.py` performs a short red, blue, and green smoke test on one bulb.
 
 The repository currently contains the schema-v13 database and 19 bulbs,
 `BULB-L01` through `BULB-L19`.
@@ -101,6 +102,21 @@ start. If the dongle already carries this network, the script keeps its newer
 counters and exits without writing.
 
 After a successful restore, unplug and reconnect the dongle before using it.
+
+## Test a bulb
+
+Connect a flashed dongle and power exactly one paired bulb. Run:
+
+```text
+python test_bulb.py
+```
+
+Enter its inventory label, for example `BULB-L14`. The script captures the
+bulb's on/off, brightness, hue, and saturation values before doing anything,
+saves the state and exact plan under `runs/`, and asks for `BLINK`. It then
+blinks the bulb once in each color—red, blue, and green—and restores and verifies
+the original state. The test uses a private database snapshot, so routine Zigbee
+traffic does not alter the committed master database.
 
 To recover a dongle from a saved pre-restore backup, use the pinned environment:
 
