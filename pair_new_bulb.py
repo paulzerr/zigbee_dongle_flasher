@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sqlite3
+import time
+from pathlib import Path
 from typing import Any
 
 import zigpy.config as zigpy_conf
 from zigpy.device import Device
 from zigpy.zcl.clusters.general import OnOff
+import zigpy_znp.types as znp_t
+from zigpy_znp.api import ZNP
 from zigpy_znp.zigbee.application import ControllerApplication
+from zigpy_znp.znp import security as znp_security
 
 from toolkit_common import (
     COORDINATOR_BACKUP,
@@ -15,19 +21,15 @@ from toolkit_common import (
     INVENTORY,
     atomic_copy,
     assert_master_data,
+    assert_runtime_versions,
     backup_device_ids,
-    backup_summary,
-    compare_backups,
     download_coordinator_backup,
     load_inventory,
     new_run_dir,
     normalize_ieee,
-    print_backup_comparison,
-    require_confirmation,
-    same_provisioned_network,
+    restore_coordinator_backup,
     select_serial_port,
-    sha256_file,
-    snapshot_master_data,
+    shutdown_zigpy_application,
     update_overview,
     validate_coordinator_backup,
     write_inventory,
@@ -104,6 +106,7 @@ async def probe_onoff(device: Device, timeout: float = 10.0) -> bool:
 
 
 async def pair_one(serial_port: str, permit_seconds: int) -> Device:
+    print("Connecting to the coordinator and loading zigpy.db...", flush=True)
     app = await ControllerApplication.new(build_config(serial_port))
     listener = PairListener()
     app.add_listener(listener)
@@ -114,8 +117,9 @@ async def pair_one(serial_port: str, permit_seconds: int) -> Device:
     }
 
     try:
-        print(f"\nPermit-join is open for {permit_seconds} seconds.")
+        print(f"\nPermit-join is open for {permit_seconds} seconds.", flush=True)
         print("Factory-reset the new bulb now and keep other unpaired Zigbee devices off.")
+        print("Waiting for a new bulb...", flush=True)
         await app.permit(permit_seconds)
         deadline = asyncio.get_running_loop().time() + permit_seconds
         while True:
@@ -133,19 +137,21 @@ async def pair_one(serial_port: str, permit_seconds: int) -> Device:
             if ieee in known:
                 print(f"Known device rejoined; ignoring {candidate.ieee}")
                 continue
+            print("New bulb detected; checking that it responds...", flush=True)
             if not await probe_onoff(candidate):
                 print(f"New device did not answer an On/Off read; ignoring {candidate.ieee}")
                 continue
             print(f"Paired: {describe_device(candidate)}")
             return candidate
     finally:
+        print("Closing permit-join and saving the database...", flush=True)
         app.remove_listener(listener)
         try:
             await app.permit(0)
         except Exception:
             pass
         await asyncio.sleep(1.5)
-        await app.shutdown()
+        await shutdown_zigpy_application(app)
 
 
 def requested_label(argument: str | None) -> str:
@@ -157,55 +163,148 @@ def requested_label(argument: str | None) -> str:
     return label
 
 
+def database_nwk(ieee: str) -> int | None:
+    wanted = normalize_ieee(ieee)
+    uri = f"file:{DATABASE.resolve()}?mode=ro&immutable=1"
+    with sqlite3.connect(uri, uri=True) as connection:
+        for stored_ieee, nwk in connection.execute("SELECT ieee, nwk FROM devices_v13"):
+            if normalize_ieee(stored_ieee) == wanted:
+                return int(nwk)
+    return None
+
+
+async def coordinator_link_key(serial_port: str, ieee: str) -> dict[str, Any] | None:
+    znp = ZNP(ControllerApplication.SCHEMA({"device": {"path": serial_port}}))
+    await znp.connect()
+    try:
+        await znp.load_network_info(load_devices=False)
+        seed_hex = znp.network_info.stack_specific.get("zstack", {}).get("tclk_seed")
+        if not seed_hex:
+            return None
+        seed = znp_t.KeyData(bytes.fromhex(seed_hex))
+        async for key in znp_security.read_hashed_link_keys(znp, seed):
+            if normalize_ieee(key.partner_ieee) == normalize_ieee(ieee):
+                return {
+                    "key": key.key.serialize().hex(),
+                    "tx_counter": int(key.tx_counter),
+                    "rx_counter": int(key.rx_counter),
+                }
+        return None
+    finally:
+        await znp.disconnect()
+
+
+def add_backup_device(
+    backup: dict[str, Any], ieee: str, nwk: int, link_key: dict[str, Any]
+) -> dict[str, Any]:
+    devices = list(backup["devices"])
+    devices.append(
+        {
+            "ieee_address": normalize_ieee(ieee),
+            "nwk_address": f"{nwk:04x}",
+            "is_child": True,
+            "link_key": link_key,
+        }
+    )
+    devices.sort(key=lambda device: str(device["ieee_address"]))
+    return {**backup, "devices": devices}
+
+
+def refresh_after_pairing(
+    serial_port: str, run_dir: Path, ieee: str, nwk: int
+) -> Path:
+    refreshed_path = run_dir / "coordinator_after_pairing.json"
+    print("\nRefreshing the coordinator backup used by the flasher...")
+    download_coordinator_backup(
+        serial_port,
+        refreshed_path,
+        run_dir / "coordinator_after_pairing_command.json",
+    )
+    refreshed = validate_coordinator_backup(refreshed_path)
+    if normalize_ieee(ieee) in backup_device_ids(refreshed):
+        print("Coordinator backup contains the new bulb.", flush=True)
+        return refreshed_path
+
+    print("Recovering the bulb's trust-center key...", flush=True)
+    link_key = asyncio.run(coordinator_link_key(serial_port, ieee))
+    if link_key is None:
+        raise RuntimeError(
+            "The paired bulb is missing from the coordinator backup and its "
+            "trust-center key could not be recovered. Do not flash dongles."
+        )
+
+    repaired_path = run_dir / "coordinator_with_paired_bulb.json"
+    write_json(repaired_path, add_backup_device(refreshed, ieee, nwk, link_key))
+    print("The coordinator omitted the bulb's address record; repairing it now...", flush=True)
+    restore_coordinator_backup(
+        serial_port,
+        repaired_path,
+        run_dir / "repair_coordinator_command.json",
+    )
+    print("Coordinator restarted; waiting 3 seconds before verification...", flush=True)
+    time.sleep(3)
+
+    verified_path = run_dir / "coordinator_after_repair.json"
+    print("Verifying the repaired coordinator state...", flush=True)
+    download_coordinator_backup(
+        serial_port,
+        verified_path,
+        run_dir / "coordinator_after_repair_command.json",
+    )
+    verified = validate_coordinator_backup(verified_path)
+    if normalize_ieee(ieee) not in backup_device_ids(verified):
+        raise RuntimeError(
+            "The coordinator repair did not persist the paired bulb. "
+            "Do not flash dongles; keep the run directory for recovery."
+        )
+    return verified_path
+
+
 def main() -> int:
     args = parse_args()
+    assert_runtime_versions()
     if args.permit_seconds < 10:
         raise RuntimeError("--permit-seconds must be at least 10")
-    assert_master_data()
     inventory = load_inventory()
     label = requested_label(args.label)
-    if any(str(item.get("label", "")).casefold() == label.casefold() for item in inventory["bulbs"]):
-        raise RuntimeError(f"Label {label!r} already exists in bulbs.json")
+    existing = next(
+        (
+            item
+            for item in inventory["bulbs"]
+            if str(item.get("label", "")).casefold() == label.casefold()
+        ),
+        None,
+    )
+
+    if existing is not None:
+        ieee = str(existing["ieee"])
+        assert_master_data(allow_missing_ieee=ieee)
+        master = validate_coordinator_backup(COORDINATOR_BACKUP)
+        if normalize_ieee(ieee) in backup_device_ids(master):
+            raise RuntimeError(f"Label {label!r} already exists in bulbs.json")
+        nwk = database_nwk(ieee)
+        if nwk is None:
+            raise RuntimeError(
+                f"Label {label!r} exists in bulbs.json but is absent from zigpy.db"
+            )
+
+        serial_port = select_serial_port(args.serial_port)
+        run_dir = new_run_dir("pair-recovery")
+        print(f"Resuming coordinator refresh for {label} -> {ieee}")
+        refreshed_path = refresh_after_pairing(serial_port, run_dir, ieee, nwk)
+        atomic_copy(refreshed_path, COORDINATOR_BACKUP)
+        update_overview("paired_new_bulb", data_changed=True)
+        print(f"\nRecovered {label} -> {ieee}")
+        print(f"Updated flasher data: {COORDINATOR_BACKUP}")
+        print(f"Command logs:         {run_dir}")
+        return 0
+
+    assert_master_data()
 
     serial_port = select_serial_port(args.serial_port)
     run_dir = new_run_dir("pair")
-    snapshot_master_data(run_dir / "before")
-    dongle_before_path = run_dir / "dongle_before_pairing.json"
-    print("\nCapturing the coordinator before opening permit-join...")
-    download_coordinator_backup(
-        serial_port,
-        dongle_before_path,
-        run_dir / "dongle_before_pairing_command.json",
-    )
-    dongle_before = validate_coordinator_backup(dongle_before_path)
-    master_before = validate_coordinator_backup(COORDINATOR_BACKUP)
-    comparison = compare_backups(dongle_before, master_before)
-    print_backup_comparison(comparison)
-    if not same_provisioned_network(dongle_before, master_before):
-        raise RuntimeError(
-            "This dongle does not match the toolkit's coordinator network. "
-            "Use the flasher on the intended golden dongle before pairing."
-        )
-
-    plan = {
-        "operation": "pair_new_bulb",
-        "serial_port": serial_port,
-        "label": label,
-        "permit_seconds": args.permit_seconds,
-        "database": str(DATABASE),
-        "database_sha256_before": sha256_file(DATABASE),
-        "inventory": str(INVENTORY),
-        "inventory_sha256_before": sha256_file(INVENTORY),
-        "coordinator_backup_before": str(dongle_before_path),
-        "coordinator_backup_sha256_before": sha256_file(dongle_before_path),
-        "coordinator_summary_before": backup_summary(dongle_before),
-    }
-    write_json(run_dir / "pairing_plan.json", plan)
-
-    print("\nPairing will change the bulb, coordinator, zigpy.db, and bulbs.json.")
-    print("The bulb factory reset cannot be undone by this script.")
-    print(f"Complete before-snapshots are in {run_dir / 'before'}")
-    require_confirmation("PAIR", "Type PAIR to open the join window: ")
+    input("Press Enter to pair now: ")
+    print("Starting pairing...", flush=True)
 
     device = asyncio.run(pair_one(serial_port, args.permit_seconds))
     ieee = str(device.ieee).lower()
@@ -215,19 +314,11 @@ def main() -> int:
     write_inventory(inventory)
     update_overview("pair_pending_coordinator_refresh", data_changed=True)
 
-    refreshed_path = run_dir / "coordinator_after_pairing.json"
-    print("\nRefreshing the coordinator backup used by the flasher...")
-    download_coordinator_backup(
-        serial_port,
-        refreshed_path,
-        run_dir / "coordinator_after_pairing_command.json",
-    )
-    refreshed = validate_coordinator_backup(refreshed_path)
-    if normalize_ieee(ieee) not in backup_device_ids(refreshed):
-        raise RuntimeError(
-            "Pairing succeeded, but the refreshed coordinator backup does not contain "
-            f"the new bulb. Keep {run_dir} and do not flash other dongles yet."
-        )
+    nwk = database_nwk(ieee)
+    if nwk is None:
+        raise RuntimeError(f"The paired bulb {ieee} was not saved to zigpy.db")
+    refreshed_path = refresh_after_pairing(serial_port, run_dir, ieee, nwk)
+    print("Installing the verified inventory and flasher data...", flush=True)
     atomic_copy(refreshed_path, COORDINATOR_BACKUP)
     update_overview("paired_new_bulb", data_changed=True)
 
@@ -235,7 +326,7 @@ def main() -> int:
     print(f"Updated database:           {DATABASE}")
     print(f"Updated inventory:          {INVENTORY}")
     print(f"Updated flasher data:       {COORDINATOR_BACKUP}")
-    print(f"Snapshots and command logs: {run_dir}")
+    print(f"Command logs:               {run_dir}")
     return 0
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import importlib.metadata
 import json
 import os
 import shutil
@@ -20,6 +21,12 @@ COORDINATOR_BACKUP = DATA_DIR / "coordinator_backup.json"
 DATABASE = DATA_DIR / "zigpy.db"
 INVENTORY = DATA_DIR / "bulbs.json"
 OVERVIEW = ROOT / "overview.csv"
+
+REQUIRED_RUNTIME_VERSIONS = {
+    "zigpy": "0.80.1",
+    "zigpy-znp": "0.13.1",
+    "aiosqlite": "0.21.0",
+}
 
 TRUSTED_WORDS = (
     "sonoff",
@@ -40,6 +47,23 @@ OVERVIEW_FIELDS = (
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def assert_runtime_versions() -> None:
+    mismatches = []
+    for package, required in REQUIRED_RUNTIME_VERSIONS.items():
+        try:
+            installed = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            installed = "not installed"
+        if installed != required:
+            mismatches.append(f"{package} {installed} (required {required})")
+    if mismatches:
+        raise RuntimeError(
+            "Unsafe Zigbee runtime; refusing to open zigpy.db: "
+            + ", ".join(mismatches)
+            + ". Run: python -m pip install -r requirements.txt"
+        )
 
 
 def run_stamp() -> str:
@@ -292,6 +316,12 @@ def select_serial_port(requested: str) -> str:
 
 
 def _run_tool(command: list[str], log_path: Path, mode: str) -> None:
+    descriptions = {
+        "network_backup": "Reading coordinator state",
+        "network_restore": "Writing coordinator state",
+    }
+    description = descriptions.get(mode, mode)
+    print(f"{description}...", flush=True)
     result = subprocess.run(command, check=False, capture_output=True, text=True)
     write_json(
         log_path,
@@ -306,6 +336,7 @@ def _run_tool(command: list[str], log_path: Path, mode: str) -> None:
     )
     if result.returncode != 0:
         raise RuntimeError(f"{mode} failed; see {log_path}")
+    print(f"{description}: done.", flush=True)
 
 
 def download_coordinator_backup(serial_port: str, output: Path, log_path: Path) -> None:
@@ -391,7 +422,18 @@ def require_confirmation(word: str, prompt: str) -> None:
         raise RuntimeError("Cancelled; no write operation was started")
 
 
-def assert_master_data() -> None:
+async def shutdown_zigpy_application(app: Any) -> None:
+    """Shut down zigpy across aiosqlite 0.21 and 0.22."""
+    listener = getattr(app, "_dblistener", None)
+    connection = getattr(listener, "_db", None)
+    if connection is not None and not hasattr(connection, "join"):
+        # aiosqlite 0.22 waits for its worker in close() and removed join(),
+        # while current zigpy releases still call join() afterward.
+        connection.join = lambda: None
+    await app.shutdown()
+
+
+def assert_master_data(*, allow_missing_ieee: str | None = None) -> None:
     for path in (COORDINATOR_BACKUP, DATABASE, INVENTORY):
         if not path.exists():
             raise RuntimeError(f"Missing required data file: {path}")
@@ -416,8 +458,14 @@ def assert_master_data() -> None:
             normalize_ieee(row[0])
             for row in connection.execute("SELECT ieee FROM devices_v13")
         }
-    missing_from_db = sorted(set(inventory_ids) - database_ids)
-    missing_from_backup = sorted(set(inventory_ids) - backup_device_ids(backup))
+    missing_from_db = set(inventory_ids) - database_ids
+    if allow_missing_ieee is not None:
+        missing_from_db.discard(normalize_ieee(allow_missing_ieee))
+    missing_from_db = sorted(missing_from_db)
+    missing_from_backup = set(inventory_ids) - backup_device_ids(backup)
+    if allow_missing_ieee is not None:
+        missing_from_backup.discard(normalize_ieee(allow_missing_ieee))
+    missing_from_backup = sorted(missing_from_backup)
     if missing_from_db:
         raise RuntimeError(
             f"bulbs.json has {len(missing_from_db)} bulb(s) missing from zigpy.db"

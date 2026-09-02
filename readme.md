@@ -1,18 +1,20 @@
 # Zigbee dongle toolkit
 
-This folder holds the working Zigbee network data and the three scripts used to
+This folder holds the working Zigbee network data and the scripts used to
 maintain it:
 
 - `download_from_dongle.py` reads the coordinator state from the known-good
   dongle and installs it as `data/coordinator_backup.json`.
 - `pair_new_bulb.py` pairs one bulb, updates `zigpy.db` and `bulbs.json`, then
   downloads a fresh coordinator backup for the flasher.
+- `remove_bulb.py` removes one bulb from the network, database, inventory, and
+  coordinator backup.
 - `zigbee_dongle_flasher.py` clones the current coordinator data onto one new
   dongle.
 - `test_bulb.py` performs a short red, blue, and green smoke test on one bulb.
 
-The repository currently contains the schema-v13 database and 19 bulbs,
-`BULB-L01` through `BULB-L19`.
+The repository currently contains the schema-v13 database and 20 bulbs,
+`BULB-L01` through `BULB-L20`.
 
 ## Important
 
@@ -46,7 +48,10 @@ python -m pip install -r requirements.txt
 ```
 
 Run scripts from the repository root so the displayed paths are easy to follow.
-All three scripts accept `--serial-port`; its default is `auto`.
+All scripts that connect to a dongle accept `--serial-port`; its default is
+`auto`.
+Every script checks the exact pinned Zigbee package versions before touching the
+database or dongle and aborts if the active Python environment does not match.
 
 ## Refresh from the known-good dongle
 
@@ -71,21 +76,31 @@ Use the known-good dongle. Keep other unpaired Zigbee devices powered off.
 python pair_new_bulb.py --label BULB-L20
 ```
 
-Before permit-join opens, the script:
-
-1. snapshots `zigpy.db`, `bulbs.json`, and `coordinator_backup.json`;
-2. downloads the dongle's complete current coordinator state;
-3. verifies that the dongle belongs to this network;
-4. writes a pairing plan and asks for `PAIR`.
-
-After you type `PAIR`, factory-reset the new bulb. When pairing succeeds, the
+Press Enter when prompted, then factory-reset the new bulb. When pairing succeeds, the
 script adds its IEEE address to `bulbs.json`, closes the Zigbee application, and
 downloads a fresh `coordinator_backup.json`. The flasher therefore uses the new
-bulb data without a manual copy step.
+bulb data without a manual copy step. If the dongle omits the bulb's address
+record from that backup, the script repairs and verifies the coordinator state.
+Rerun the same command to resume an interrupted post-pair repair.
 
 If the final coordinator download fails, do not flash more dongles. The bulb and
 database may already have changed; keep the run directory and rerun
 `download_from_dongle.py` with the same known-good dongle.
+
+## Remove a bulb
+
+Connect only the known-good dongle, power the bulb, and run:
+
+```text
+python remove_bulb.py --label BULB-L20
+```
+
+Press Enter when prompted. The script asks the bulb to leave, removes it from
+`zigpy.db` and `bulbs.json`, and refreshes `coordinator_backup.json` for the
+flasher. It explicitly removes the coordinator's security record; if the
+firmware still retains device metadata, a verified cleanup fallback removes it.
+An interrupted removal can be rerun with the same label. Do not flash dongles
+unless the final verification succeeds.
 
 ## Prepare a new dongle
 
@@ -96,8 +111,8 @@ python zigbee_dongle_flasher.py
 ```
 
 The flasher always downloads the dongle's original coordinator state first. It
-saves the complete backup and a redacted comparison under `runs/`, then asks for
-`RESTORE`. If the original backup cannot be captured, restoration does not
+saves the complete backup and a redacted comparison under `runs/`, then asks you
+to press Enter. If the original backup cannot be captured, restoration does not
 start. If the dongle already carries this network, the script keeps its newer
 counters and exits without writing.
 
@@ -116,7 +131,9 @@ blinks the bulb once in each color—red, blue, and green—and leaves it off. E
 pulse lasts 0.175 seconds with a 0.1-second pause. It uses the same simple command
 order as the original working test and does not create a state snapshot or
 backup. A faint trace of the preceding color may appear while the bulb applies
-the next hue.
+the next hue. Before sending commands, it reports whether the bulb exists in the
+local inventory/database and whether the connected dongle carries the toolkit
+network. It still tries the bulb and reports routing failures in plain language.
 
 To recover a dongle from a saved pre-restore backup, use the pinned environment:
 
@@ -134,6 +151,20 @@ Review the path carefully before running a recovery restore.
   device records used by the flasher.
 - `overview.csv`: one human-readable row with the last data change, most recent
   completed operation, bulb count, and paired bulb names.
+
+These files are separate because they serve different consumers:
+
+| File | Purpose | Required for |
+|---|---|---|
+| `zigpy.db` | Detailed computer-side Zigbee application state: devices, endpoints, clusters, and attributes | Running and controlling the Zigbee network through zigpy |
+| `bulbs.json` | Toolkit-specific human labels such as `BULB-L20`, mapped to IEEE addresses | Selecting bulbs by a stable, readable name; this file is convenient rather than fundamental to Zigbee |
+| `coordinator_backup.json` | Portable coordinator identity, network credentials, counters, and device/link-key records | Cloning the network onto another dongle |
+
+`zigpy.db` cannot replace the coordinator backup because it does not contain a
+restorable copy of all dongle state. The coordinator backup cannot replace
+`zigpy.db` because it does not contain zigpy's application model. `bulbs.json`
+could technically be replaced by another label store, but the toolkit keeps it
+as a small, explicit inventory.
 
 The scripts maintain `overview.csv`. Detailed snapshots and command output are
 kept under `runs/` and ignored by Git because they can contain sensitive keys.

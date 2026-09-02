@@ -75,6 +75,10 @@
     {
       "label": "BULB-L19",
       "ieee": "f0:d1:b8:be:24:0c:69:5e"
+    },
+    {
+      "label": "BULB-L20",
+      "ieee": "f0:d1:b8:be:24:0b:bc:16"
     }
   ]
 }

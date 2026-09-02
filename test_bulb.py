@@ -6,19 +6,24 @@ from pathlib import Path
 from typing import Any
 
 import zigpy.config as zigpy_conf
+import zigpy.exceptions
 from zigpy.device import Device
 from zigpy.zcl.clusters.general import LevelControl, OnOff
 from zigpy.zcl.clusters.lighting import Color
 from zigpy_znp.zigbee.application import ControllerApplication
 
 from toolkit_common import (
+    COORDINATOR_BACKUP,
     DATABASE,
     INVENTORY,
     assert_master_data,
+    assert_runtime_versions,
     load_inventory,
     normalize_ieee,
     select_serial_port,
+    shutdown_zigpy_application,
     update_overview,
+    validate_coordinator_backup,
 )
 
 
@@ -77,12 +82,51 @@ def build_config(serial_port: str, database: Path) -> dict[str, Any]:
     }
 
 
+def dongle_network_mismatches(app: ControllerApplication) -> list[str]:
+    expected = validate_coordinator_backup(COORDINATOR_BACKUP)
+    actual_network = app.state.network_info
+    actual_node = app.state.node_info
+    checks = {
+        "coordinator identity": (
+            normalize_ieee(actual_node.ieee),
+            normalize_ieee(expected["coordinator_ieee"]),
+        ),
+        "PAN ID": (int(actual_network.pan_id), int(expected["pan_id"], 16)),
+        "extended PAN ID": (
+            normalize_ieee(actual_network.extended_pan_id),
+            normalize_ieee(expected["extended_pan_id"]),
+        ),
+        "channel": (int(actual_network.channel), int(expected["channel"])),
+        "network key": (
+            actual_network.network_key.key.serialize().hex(),
+            str(expected["network_key"]["key"]).lower(),
+        ),
+    }
+    return [name for name, (actual, wanted) in checks.items() if actual != wanted]
+
+
 async def run_test(serial_port: str, label: str, ieee: str) -> None:
+    print("Connecting to the coordinator and loading the bulb...", flush=True)
     app = await ControllerApplication.new(build_config(serial_port, DATABASE))
     try:
         device = find_device(app, ieee)
+        print("Local inventory: bulb found.", flush=True)
+        print("zigpy.db: bulb record found.", flush=True)
+
+        mismatches = dongle_network_mismatches(app)
+        if mismatches:
+            print(
+                "Warning: this dongle does not carry the toolkit Zigbee network "
+                f"({', '.join(mismatches)} differ).",
+                flush=True,
+            )
+        else:
+            print("Dongle network identity: matches the toolkit.", flush=True)
+        print("Trying a direct bulb request anyway...", flush=True)
+
         task = device.schedule_initialize()
         if task is not None:
+            print("Initializing the bulb...", flush=True)
             await asyncio.wait_for(task, timeout=20)
 
         color = find_input_cluster(device, Color.cluster_id)
@@ -92,7 +136,7 @@ async def run_test(serial_port: str, label: str, ieee: str) -> None:
         print(f"Bulb:  {label} ({ieee})")
         print(f"Dongle: {serial_port}")
         for name, hue, saturation in COLORS:
-            print(name)
+            print(f"Testing {name}...", flush=True)
             await onoff.on(expect_reply=True)
             await color.move_to_hue_and_saturation(
                 hue=hue,
@@ -109,12 +153,21 @@ async def run_test(serial_port: str, label: str, ieee: str) -> None:
             await asyncio.sleep(ON_SECONDS)
             await onoff.off(expect_reply=True)
             await asyncio.sleep(OFF_SECONDS)
+    except zigpy.exceptions.DeliveryError as exc:
+        status = getattr(exc.status, "name", str(exc.status or "delivery failure"))
+        raise RuntimeError(
+            f"Bulb {label} exists in bulbs.json and zigpy.db, but it was not found "
+            f"or reachable through {serial_port} ({status}). The dongle may be "
+            "unflashed, on another Zigbee network, or the bulb may be offline."
+        ) from None
     finally:
-        await app.shutdown()
+        print("Closing the coordinator connection...", flush=True)
+        await shutdown_zigpy_application(app)
 
 
 def main() -> int:
     args = parse_args()
+    assert_runtime_versions()
     assert_master_data()
     label = (args.bulb_id or input("Bulb ID (for example BULB-L14): ")).strip()
     if not label:

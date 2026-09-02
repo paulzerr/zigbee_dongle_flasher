@@ -8,6 +8,7 @@ from toolkit_common import (
     backup_summary,
     compare_backups,
     download_coordinator_backup,
+    assert_runtime_versions,
     load_json,
     new_run_dir,
     print_backup_comparison,
@@ -30,6 +31,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    assert_runtime_versions()
     serial_port = select_serial_port(args.serial_port)
     run_dir = new_run_dir("download")
     downloaded = run_dir / "downloaded_coordinator_backup.json"
@@ -70,6 +72,7 @@ def main() -> int:
         "Type SAVE to make this the coordinator backup used by the flasher: ",
     )
 
+    print("Installing the downloaded coordinator backup...", flush=True)
     atomic_copy(downloaded, COORDINATOR_BACKUP)
     update_overview("download_from_dongle", data_changed=True)
     print(f"Installed current coordinator data at {COORDINATOR_BACKUP}")
