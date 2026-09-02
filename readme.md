@@ -115,7 +115,10 @@ saves the complete backup and a redacted comparison under `runs/`, then starts
 the restore immediately without asking for confirmation. If that backup fails,
 the script records that no recovery backup is available, prints a warning, and
 continues flashing. If the dongle already carries this network, the script keeps
-its newer counters and exits without writing.
+its newer counters and exits without writing. Otherwise, it finds the highest
+network frame counter previously observed, reserves another 1,000,000 counts,
+and restores at that higher value. This prevents a restore from rolling the
+counter backward and causing bulbs to reject commands as replays.
 
 After a successful restore, unplug and reconnect the dongle before using it.
 
@@ -160,12 +163,16 @@ These files are separate because they serve different consumers:
 | `zigpy.db` | Detailed computer-side Zigbee application state: devices, endpoints, clusters, and attributes | Running and controlling the Zigbee network through zigpy |
 | `bulbs.json` | Toolkit-specific human labels such as `BULB-L20`, mapped to IEEE addresses | Selecting bulbs by a stable, readable name; this file is convenient rather than fundamental to Zigbee |
 | `coordinator_backup.json` | Portable coordinator identity, network credentials, counters, and device/link-key records | Cloning the network onto another dongle |
+| `frame_counter_high_water.json` | Highest network frame counter reserved by the flasher | Preventing later flashes from restoring an older security counter |
 
 `zigpy.db` cannot replace the coordinator backup because it does not contain a
 restorable copy of all dongle state. The coordinator backup cannot replace
 `zigpy.db` because it does not contain zigpy's application model. `bulbs.json`
 could technically be replaced by another label store, but the toolkit keeps it
 as a small, explicit inventory.
+
+Do not delete or roll back `frame_counter_high_water.json`; it is part of the
+flasher's safety state.
 
 The scripts maintain `overview.csv`. Detailed snapshots and command output are
 kept under `runs/` and ignored by Git because they can contain sensitive keys.

@@ -354,7 +354,13 @@ def download_coordinator_backup(serial_port: str, output: Path, log_path: Path) 
     validate_coordinator_backup(output)
 
 
-def restore_coordinator_backup(serial_port: str, source: Path, log_path: Path) -> None:
+def restore_coordinator_backup(
+    serial_port: str,
+    source: Path,
+    log_path: Path,
+    *,
+    counter_increment: int | None = None,
+) -> None:
     validate_coordinator_backup(source)
     command = [
         sys.executable,
@@ -364,6 +370,10 @@ def restore_coordinator_backup(serial_port: str, source: Path, log_path: Path) -
         "--input",
         str(source),
     ]
+    if counter_increment is not None:
+        if not 0 <= counter_increment <= 0xFFFFFFFF:
+            raise RuntimeError(f"Invalid network frame-counter increment: {counter_increment}")
+        command.extend(["--counter-increment", str(counter_increment)])
     _run_tool(command, log_path, "network_restore")
 
 
