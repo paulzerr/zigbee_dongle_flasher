@@ -73,8 +73,7 @@ def main() -> int:
         return 0
 
     print("\nThe restore will overwrite this dongle's coordinator identity and credentials.")
-    input("Review the changes above, then press Enter to flash now: ")
-    print("Starting coordinator restore...", flush=True)
+    print("Starting coordinator restore immediately...", flush=True)
     restore_coordinator_backup(
         serial_port,
         COORDINATOR_BACKUP,
