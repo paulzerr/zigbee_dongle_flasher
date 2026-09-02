@@ -112,9 +112,10 @@ python zigbee_dongle_flasher.py
 
 The flasher always downloads the dongle's original coordinator state first. It
 saves the complete backup and a redacted comparison under `runs/`, then starts
-the restore immediately without asking for confirmation. If the original backup
-cannot be captured, restoration does not start. If the dongle already carries
-this network, the script keeps its newer counters and exits without writing.
+the restore immediately without asking for confirmation. If that backup fails,
+the script records that no recovery backup is available, prints a warning, and
+continues flashing. If the dongle already carries this network, the script keeps
+its newer counters and exits without writing.
 
 After a successful restore, unplug and reconnect the dongle before using it.
 

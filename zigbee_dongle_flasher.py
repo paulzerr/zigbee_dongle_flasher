@@ -42,31 +42,59 @@ def main() -> int:
     print(f"Restore data:  {COORDINATOR_BACKUP}")
     print(f"Restore SHA:   {sha256_file(COORDINATOR_BACKUP)}")
     print("\nCapturing the dongle's complete current coordinator state first...")
-    download_coordinator_backup(
-        serial_port,
-        before_path,
-        run_dir / "before_restore_command.json",
-    )
-    before = validate_coordinator_backup(before_path)
-    changes = compare_backups(before, target)
-    print_backup_comparison(changes)
+    backup_log_path = run_dir / "before_restore_command.json"
+    backup_status_path = run_dir / "before_restore_status.json"
+    try:
+        download_coordinator_backup(serial_port, before_path, backup_log_path)
+        before = validate_coordinator_backup(before_path)
+        changes = compare_backups(before, target)
+        backup_error = None
+        write_json(
+            backup_status_path,
+            {
+                "status": "available",
+                "backup": str(before_path),
+                "backup_sha256": sha256_file(before_path),
+                "command_log": str(backup_log_path),
+            },
+        )
+        print_backup_comparison(changes)
+    except Exception as exc:
+        before = None
+        changes = []
+        backup_error = str(exc)
+        write_json(
+            backup_status_path,
+            {
+                "status": "unavailable",
+                "backup": None,
+                "command_log": str(backup_log_path),
+                "error": backup_error,
+            },
+        )
+        print(f"\nWARNING: Could not back up this dongle: {backup_error}")
+        print("No recovery backup is available. Continuing with the flash.")
+        print(f"Backup status: {backup_status_path}")
 
     plan = {
         "operation": "restore_coordinator_backup",
         "serial_port": serial_port,
-        "original_backup": str(before_path),
-        "original_backup_sha256": sha256_file(before_path),
+        "original_backup": str(before_path) if before is not None else None,
+        "original_backup_sha256": sha256_file(before_path) if before is not None else None,
+        "original_backup_status": "available" if before is not None else "unavailable",
+        "original_backup_error": backup_error,
         "restore_source": str(COORDINATOR_BACKUP),
         "restore_source_sha256": sha256_file(COORDINATOR_BACKUP),
-        "original_summary": backup_summary(before),
+        "original_summary": backup_summary(before) if before is not None else None,
         "restore_summary": backup_summary(target),
         "changes": changes,
     }
     write_json(run_dir / "restore_plan.json", plan)
-    print(f"\nOriginal dongle backup: {before_path}")
+    original_backup_display = str(before_path) if before is not None else "none"
+    print(f"\nOriginal dongle backup: {original_backup_display}")
     print(f"Restore plan:           {run_dir / 'restore_plan.json'}")
 
-    if same_provisioned_network(before, target):
+    if before is not None and same_provisioned_network(before, target):
         print("\nThis dongle already has the current network identity, keys, and device set.")
         print("Its counters are newer and will not be rolled back. Nothing was written.")
         update_overview("flasher_already_current", data_changed=False)
